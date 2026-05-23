@@ -1,0 +1,27 @@
+{
+    "name": "ianustec/nextcloud-google-calendar-sync",
+    "description": "Bidirectional Google Workspace calendar sync for Nextcloud via domain Service Account with Domain-Wide Delegation",
+    "type": "project",
+    "license": "AGPL-3.0-or-later",
+    "authors": [
+        {
+            "name": "IANUSTEC",
+            "email": "opensource@ianustec.com",
+            "homepage": "https://ianustec.com"
+        }
+    ],
+    "homepage": "https://github.com/ianustec/nextcloud-google-calendar-sync",
+    "require": {
+        "php": ">=8.1",
+        "google/apiclient": "^2.15"
+    },
+    "autoload": {
+        "psr-4": {
+            "OCA\\NeuraGoogleCalendarSync\\": "lib/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}

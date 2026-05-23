@@ -1,0 +1,10 @@
+/vendor/
+composer.phar
+composer-setup.php
+*.json.key
+*-credentials.json
+*-service-account.json
+.DS_Store
+*.swp
+*.swo
+/node_modules/
