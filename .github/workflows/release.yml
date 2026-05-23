@@ -1,9 +1,11 @@
 name: Release
 
+# Triggered by pushing a version tag from develop to master.
+# Workflow: develop (daily work) -> tag vX.Y.Z -> this action merges to master + creates release.
 on:
   push:
     tags:
-    - 'v*.*.*'
+      - 'v*.*.*'
 
 jobs:
   build-and-release:
