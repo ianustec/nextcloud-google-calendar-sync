@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.5 – 2026-05-23
+
+### Changed
+- Added inline comments explaining non-obvious decisions in SyncEngine, GoogleCalendarService, NextcloudCalendarService, IcalConverter and ConfigService
+
 ## 1.0.4 – 2026-05-23
 
 ### Changed

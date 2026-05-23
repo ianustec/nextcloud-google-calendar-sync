@@ -143,6 +143,8 @@ class IcalConverter {
         $event->setLocation((string)($vevent->LOCATION ?? ''));
 
         if (isset($vevent->DTSTART)) {
+            // iCal DATE values (all-day events) have no "T" separator.
+            // Google expects "date" for all-day and "dateTime" for timed events.
             $allDay = !str_contains((string)$vevent->DTSTART, 'T');
             if ($allDay) {
                 $event->setStart(new EventDateTime([
@@ -248,6 +250,7 @@ class IcalConverter {
 
         if ($start !== null) {
             if ($start->getDate() !== null) {
+                // iCal DATE format: YYYYMMDD (no dashes)
                 $vevent->add('DTSTART', str_replace('-', '', $start->getDate()), ['VALUE' => 'DATE']);
             } elseif ($start->getDateTime() !== null) {
                 $vevent->DTSTART = $this->toSabreDateTime($start->getDateTime());

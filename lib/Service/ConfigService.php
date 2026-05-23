@@ -92,6 +92,8 @@ class ConfigService {
             try {
                 $json = $this->crypto->decrypt($encrypted);
             } catch (\Throwable) {
+                // Decryption failed, which means the value was stored before encryption
+                // was introduced (plain JSON). Treat it as-is for backward compatibility.
                 $json = $encrypted;
             }
             $data = json_decode($json, true, 512, JSON_THROW_ON_ERROR);

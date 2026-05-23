@@ -106,13 +106,17 @@ class GoogleCalendarService {
         try {
             do {
                 $params = [
-                    'maxResults'  => 250,
-                    'singleEvents' => true,
-                    'showDeleted' => true,
+                    'maxResults'   => 250,
+                    'singleEvents' => true,  // Expand recurring events; each instance is a separate object.
+                    'showDeleted'  => true,  // Required to receive "cancelled" tombstones for deletions.
                 ];
                 if ($syncToken !== null) {
+                    // Incremental sync: only events changed since the token was issued.
+                    // syncToken and timeMin are mutually exclusive in the Google API.
                     $params['syncToken'] = $syncToken;
                 } elseif ($fromDate !== null) {
+                    // Full sync with a lower-bound filter. Omitting timeMin entirely
+                    // returns all past events, which can be very large on active calendars.
                     $params['timeMin'] = $fromDate->format(\DateTimeInterface::RFC3339);
                 }
                 if ($pageToken !== null) {
@@ -125,11 +129,14 @@ class GoogleCalendarService {
                     $events[] = $event;
                 }
                 $pageToken = $result->getNextPageToken();
+                // nextSyncToken is only present on the final page of the response.
                 if ($pageToken === null) {
                     $nextSyncToken = $result->getNextSyncToken();
                 }
             } while ($pageToken !== null);
         } catch (GoogleServiceException $e) {
+            // HTTP 410 means the sync token expired (Google invalidates them after ~7 days
+            // or after certain Workspace admin operations). Fall back to a full resync.
             if ($e->getCode() === 410 && $syncToken !== null) {
                 return $this->listEvents($userEmail, $calendarId, null, $fromDate);
             }

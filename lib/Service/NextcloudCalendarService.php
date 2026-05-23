@@ -47,10 +47,10 @@ class NextcloudCalendarService {
                 continue;
             }
             $result[] = [
-                'id'          => (string)$cal['id'],
-                'uri'         => (string)($cal['uri'] ?? ''),
+                'id' => (string)$cal['id'],
+                'uri' => (string)($cal['uri'] ?? ''),
                 'displayName' => (string)($cal['{DAV:}displayname'] ?? $cal['uri'] ?? 'Calendar'),
-                'ctag'        => (string)($cal['getctag'] ?? ''),
+                'ctag' => (string)($cal['getctag'] ?? ''),
             ];
         }
         return $result;
@@ -70,12 +70,14 @@ class NextcloudCalendarService {
         $objects = $this->calDavBackend->getCalendarObjects($id);
         $events = [];
         foreach ($objects as $obj) {
+            // getCalendarObjects returns metadata only (uri, etag, size).
+            // A second call per object is needed to get the actual iCal payload.
             $full = $this->calDavBackend->getCalendarObject($id, $obj['uri']);
             if ($full === null) {
                 continue;
             }
             $events[] = [
-                'uri'  => (string)$full['uri'],
+                'uri' => (string)$full['uri'],
                 'etag' => (string)($full['etag'] ?? ''),
                 'data' => (string)($full['calendardata'] ?? ''),
             ];
@@ -96,11 +98,12 @@ class NextcloudCalendarService {
      * @return string ETag of the stored object.
      */
     public function createEvent(string $calendarId, string $uid, string $icalData): string {
-        $id  = (int)$calendarId;
+        $id = (int)$calendarId;
         $uri = $this->uidToUri($uid);
 
         $existing = $this->calDavBackend->getCalendarObject($id, $uri);
         if ($existing !== null) {
+            // Object already exists — update instead of create (upsert)
             $this->calDavBackend->updateCalendarObject($id, $uri, $icalData);
         } else {
             $this->calDavBackend->createCalendarObject($id, $uri, $icalData);
@@ -119,7 +122,7 @@ class NextcloudCalendarService {
      * @return string New ETag of the stored object.
      */
     public function updateEvent(string $calendarId, string $uid, string $icalData): string {
-        $id  = (int)$calendarId;
+        $id = (int)$calendarId;
         $uri = $this->uidToUri($uid);
         $this->calDavBackend->updateCalendarObject($id, $uri, $icalData);
         $obj = $this->calDavBackend->getCalendarObject($id, $uri);
@@ -144,7 +147,7 @@ class NextcloudCalendarService {
      * @return array{uri: string, etag: string, data: string}|null Object data or null if not found.
      */
     public function getEvent(string $calendarId, string $uid): ?array {
-        $id  = (int)$calendarId;
+        $id = (int)$calendarId;
         $uri = $this->uidToUri($uid);
         $obj = $this->calDavBackend->getCalendarObject($id, $uri);
         if ($obj === null) {

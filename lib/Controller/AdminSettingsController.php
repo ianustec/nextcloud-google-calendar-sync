@@ -75,6 +75,7 @@ class AdminSettingsController extends Controller {
         if ($syncFromDate !== '') {
             $this->configService->setSyncFromDate($syncFromDate);
         }
+
         if ($saJsonKey !== '') {
             $this->configService->setServiceAccountKeyJson($saJsonKey);
         }
@@ -129,12 +130,12 @@ class AdminSettingsController extends Controller {
         });
 
         return new DataResponse([
-            'status'      => 'ok',
-            'synced'      => $synced,
+            'status' => 'ok',
+            'synced' => $synced,
             'syncedUsers' => $syncedUsers,
-            'skipped'     => $skipped,
-            'failed'      => $failed,
-            'errors'      => $errors,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'errors' => $errors,
         ]);
     }
 

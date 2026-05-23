@@ -96,6 +96,9 @@ class SyncEngine {
             throw new GoogleSyncSkipException("User $userId has no Google calendars (no Calendar license?)");
         }
 
+        // Build a name-keyed index for O(1) lookups during calendar matching.
+        // Google calendar names are not guaranteed to be unique but collisions
+        // are rare enough that a last-write-wins overwrite is acceptable here.
         $googleByName = [];
         $googlePrimary = null;
         foreach ($googleCalendars as $gCal) {
@@ -113,11 +116,17 @@ class SyncEngine {
         $isFirstNcCal = true;
 
         foreach ($ncCalendars as $ncCal) {
+            // A persisted mapping means we already matched this pair on a previous run.
+            // Skip the name-matching logic and go straight to sync.
             $mapping = $this->calendarMappingMapper->findByNcCalendar($userId, $ncCal['id']);
             if ($mapping === null) {
                 $nameKey = mb_strtolower(trim($ncCal['displayName']));
                 $gCal = $googleByName[$nameKey] ?? null;
 
+                // Fallback for new Nextcloud accounts: the default NC calendar is often
+                // named "Personal" while the Google primary is named after the user.
+                // Rather than leaving it unmatched, we pair the first NC calendar with
+                // the Google primary so at least one calendar syncs out of the box.
                 if ($gCal === null && $isFirstNcCal && $googlePrimary !== null) {
                     $gCal = $googlePrimary;
                     $this->logger->info('Calendar name mismatch — mapping NC calendar to Google primary', [
@@ -176,6 +185,8 @@ class SyncEngine {
             $fromDate
         );
 
+        // Load NC events into a UID-keyed map so we can look them up in O(1)
+        // while iterating the Google event list below.
         $ncEvents = $this->ncService->listEvents($ncCalendarId);
         $ncByUid = [];
         foreach ($ncEvents as $ncEvent) {
@@ -183,10 +194,13 @@ class SyncEngine {
                 $uid = $this->icalConverter->extractUid($ncEvent['data']);
                 $ncByUid[$uid] = $ncEvent;
             } catch (\Throwable) {
+                // Malformed iCal objects are skipped; they cannot be mapped.
                 continue;
             }
         }
 
+        // Build two indexes from the persisted mapping rows so we can resolve
+        // both directions (NC uid -> mapping, Google id -> mapping) cheaply.
         $eventMappings  = $this->eventMappingMapper->findByCalendar($ncCalendarId);
         $mappingByNcUid = [];
         $mappingByGoogleId = [];
@@ -195,6 +209,7 @@ class SyncEngine {
             $mappingByGoogleId[$em->getGoogleEventId()] = $em;
         }
 
+        // Pass 1: iterate Google events and apply changes to Nextcloud.
         foreach ($googleResult['events'] as $gEvent) {
             $gEventId = $gEvent->getId();
             if ($gEventId === null) {
@@ -203,11 +218,14 @@ class SyncEngine {
 
             $em = $mappingByGoogleId[$gEventId] ?? null;
 
+            // Google marks deleted events as "cancelled" rather than omitting them.
+            // We need showDeleted=true in listEvents to receive these tombstones.
             if ($gEvent->getStatus() === 'cancelled') {
                 if ($em !== null) {
                     try {
                         $this->ncService->deleteEvent($ncCalendarId, $em->getNcEventUid());
                     } catch (\Throwable $e) {
+                        // If the NC object is already gone we can still clean up the mapping.
                         $this->logger->warning('Failed to delete NC event for Google cancellation', [
                             'uid'   => $em->getNcEventUid(),
                             'error' => $e->getMessage(),
@@ -219,10 +237,13 @@ class SyncEngine {
             }
 
             if ($em === null) {
+                // New Google event with no mapping: create it in NC and record the pair.
                 $uid  = $this->generateUid($gEventId);
                 $ical = $this->icalConverter->googleEventToIcal($gEvent, $uid);
                 $etag = $this->ncService->createEvent($ncCalendarId, $uid, $ical);
 
+                // Guard against duplicate mapping rows that can appear when a previous
+                // sync run created the NC object but then failed before writing the row.
                 $existingMapping = $this->eventMappingMapper->findByGoogleEvent($googleCalendarId, $gEventId);
                 if ($existingMapping !== null) {
                     $existingMapping->setNcEtag($etag);
@@ -244,6 +265,8 @@ class SyncEngine {
 
             $ncEvent = $ncByUid[$em->getNcEventUid()] ?? null;
             if ($ncEvent === null) {
+                // Mapping exists but the NC object was deleted externally.
+                // Recreate it from Google to restore consistency.
                 $uid  = $em->getNcEventUid();
                 $ical = $this->icalConverter->googleEventToIcal($gEvent, $uid);
                 $etag = $this->ncService->createEvent($ncCalendarId, $uid, $ical);
@@ -253,10 +276,15 @@ class SyncEngine {
                 continue;
             }
 
+            // Compare etags to detect changes on each side since the last sync.
             $ncChanged = ($em->getNcEtag() ?? '') !== $ncEvent['etag'];
             $gChanged  = ($em->getGoogleEtag() ?? '') !== ($gEvent->getEtag() ?? '');
 
             if ($ncChanged && $gChanged) {
+                // True conflict: both sides changed since the last sync.
+                // Use last-modified as the tiebreaker (last-write-wins).
+                // When timestamps are absent or equal, Nextcloud wins to preserve
+                // locally entered data and avoid surprising users.
                 $ncLm = $this->icalConverter->extractLastModified($ncEvent['data']);
                 $gLm  = $this->icalConverter->googleLastModified($gEvent);
                 if ($this->ncWins($ncLm, $gLm)) {
@@ -269,8 +297,11 @@ class SyncEngine {
             } elseif ($gChanged) {
                 $this->pushGoogleToNc($ncCalendarId, $gEvent, $em);
             }
+            // No changes on either side: nothing to do for this event.
         }
 
+        // Pass 2: push NC events that have no mapping yet to Google.
+        // These are events created locally in Nextcloud since the last sync.
         foreach ($ncEvents as $ncEvent) {
             try {
                 $uid = $this->icalConverter->extractUid($ncEvent['data']);
@@ -278,6 +309,7 @@ class SyncEngine {
                 continue;
             }
 
+            // Already handled in pass 1 (mapping existed).
             if (isset($mappingByNcUid[$uid])) {
                 continue;
             }
@@ -290,6 +322,8 @@ class SyncEngine {
                 continue;
             }
 
+            // Same upsert guard as pass 1: a partial failure on a previous run
+            // might have left the Google event created but the mapping row missing.
             $existingNcMapping = $this->eventMappingMapper->findByNcEvent($ncCalendarId, $uid);
             if ($existingNcMapping !== null) {
                 $existingNcMapping->setGoogleCalendarId($googleCalendarId);
