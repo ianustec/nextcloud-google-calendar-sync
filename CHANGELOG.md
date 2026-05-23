@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.3 – 2026-05-23
+
+### Fixed
+- Apache Timeout raised to 3600s during deploy to prevent truncated JSON responses on large mailboxes
+- deploy.sh (k8s/docker): fixed call from NEURA-Services to pass `k8s` mode argument
+
 ## 1.0.2 – 2026-05-23
 
 ### Changed

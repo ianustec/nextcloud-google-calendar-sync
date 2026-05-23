@@ -110,6 +110,8 @@ deploy_k8s() {
     php occ app:enable "$APP_ID"
   $KUBECTL -n "$NS" exec "deployment/$DEPLOY" -c nextcloud -- \
     php occ upgrade
+  $KUBECTL -n "$NS" exec "deployment/$DEPLOY" -c nextcloud -- sh -c \
+    "echo 'Timeout 3600' > /etc/apache2/conf-enabled/gcal-sync-timeout.conf"
   $KUBECTL -n "$NS" exec "deployment/$DEPLOY" -c nextcloud -- \
     apachectl graceful 2>/dev/null || true
 
@@ -157,6 +159,9 @@ deploy_docker() {
     php ${NC_ROOT}/occ app:enable "$APP_ID"
   $DOCKER exec --user "$WEB_USER" "$CONTAINER" \
     php ${NC_ROOT}/occ upgrade
+  # Increase Apache timeout for long-running sync requests
+  $DOCKER exec "$CONTAINER" sh -c \
+    "echo 'Timeout 3600' > /etc/apache2/conf-enabled/gcal-sync-timeout.conf 2>/dev/null || true"
   # Reload web server (Apache or nginx+fpm)
   $DOCKER exec "$CONTAINER" sh -c \
     "apachectl graceful 2>/dev/null || kill -USR2 1 2>/dev/null || true"
