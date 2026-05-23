@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.2 – 2026-05-23
+
+### Changed
+- `deploy.sh` rewritten to support three modes: `k8s`, `docker`, `local`
+- Docker mode auto-detects Nextcloud root and web server user inside the container
+- Local mode uses `rsync` for fast incremental copy
+- README updated with deploy examples for all three modes
+
 ## 1.0.1 – 2026-05-23
 
 ### Fixed

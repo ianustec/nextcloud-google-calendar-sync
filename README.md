@@ -85,26 +85,42 @@ Click **Authorize**. Allow up to 10 minutes for propagation.
 
 ## Installation
 
-### From source (manual)
-
-```bash
-git clone https://github.com/ianustec/nextcloud-google-calendar-sync
-cd nextcloud-google-calendar-sync
-composer install --no-dev --optimize-autoloader
-cp -r . /path/to/nextcloud/custom_apps/neura_google_calendar_sync
-php occ app:enable neura_google_calendar_sync
-php occ upgrade
-```
-
 ### Kubernetes
 
 ```bash
 git clone https://github.com/ianustec/nextcloud-google-calendar-sync
 cd nextcloud-google-calendar-sync
-GOOGLE_WORKSPACE_DOMAIN=yourdomain.com ./deploy.sh <namespace> <deployment>
+./deploy.sh k8s <namespace> <deployment>
+
+# Example
+GOOGLE_WORKSPACE_DOMAIN=yourdomain.com ./deploy.sh k8s my-namespace nextcloud
 ```
 
-The script handles composer, file copy, app enable, migrations, and OPcache reload automatically.
+### Docker / Docker Compose
+
+```bash
+git clone https://github.com/ianustec/nextcloud-google-calendar-sync
+cd nextcloud-google-calendar-sync
+./deploy.sh docker <container-name>
+
+# Example (container name from docker-compose.yml)
+GOOGLE_WORKSPACE_DOMAIN=yourdomain.com ./deploy.sh docker nextcloud
+```
+
+The container name is the value of `container_name` in your `docker-compose.yml`, or the name shown by `docker ps`.
+
+### Bare metal / manual
+
+```bash
+git clone https://github.com/ianustec/nextcloud-google-calendar-sync
+cd nextcloud-google-calendar-sync
+./deploy.sh local /var/www/html
+
+# If occ requires root
+GOOGLE_WORKSPACE_DOMAIN=yourdomain.com sudo ./deploy.sh local /var/www/nextcloud
+```
+
+All three modes handle composer dependencies, file copy, `occ app:enable`, migrations (`occ upgrade`), and web server reload automatically.
 
 ---
 
