@@ -16,6 +16,10 @@ _Migrating away from the cloud shouldn't mean losing your data. Nextcloud has ev
 
 ---
 
+![Admin UI](img/screenshot.png)
+
+---
+
 IANUSTEC believes leaving Big Tech infrastructure should be easy. We build open-source Nextcloud addons that bridge the gap between Google / Microsoft services and self-hosted alternatives — so companies can migrate at their own pace, without losing productivity.
 
 This app is our **Google Calendar bridge**: it keeps every user's Nextcloud calendar in perfect sync with Google Workspace, bidirectionally, without any per-user configuration.
