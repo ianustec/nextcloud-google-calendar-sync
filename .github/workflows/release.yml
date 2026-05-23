@@ -1,7 +1,7 @@
 name: Release
 
 # Triggered by pushing a version tag from develop to master.
-# Workflow: develop (daily work) -> tag vX.Y.Z -> this action merges to master + creates release.
+# Workflow: develop (daily work) -> tag vX.Y.Z -> this action builds and publishes a release.
 on:
   push:
     tags:
@@ -13,75 +13,81 @@ jobs:
     permissions:
       contents: write
 
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup PHP
-      uses: shivammathur/setup-php@v2
-      with:
-        php-version: '8.2'
-        extensions: curl, json
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, json
 
-    - name: Install Composer dependencies
-      run: composer install --no-dev --optimize-autoloader --no-interaction
+      - name: Install Composer dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction
 
-    - name: Extract version from tag
-      id: version
-      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-    - name: Build release tarball
-      run: |
-        APP_ID="neura_google_calendar_sync"
-        VERSION="${{ steps.version.outputs.version }}"
-        ARCHIVE="${APP_ID}-${VERSION}.tar.gz"
+      - name: Build release tarball
+        id: build
+        run: |
+          APP_ID="neura_google_calendar_sync"
+          VERSION="${{ steps.version.outputs.version }}"
+          ARCHIVE="${APP_ID}-${VERSION}.tar.gz"
 
-        mkdir -p /tmp/build/${APP_ID}
-        rsync -a \
-          --exclude='.git' \
-          --exclude='.github' \
-          --exclude='.gitignore' \
-          --exclude='*.md' \
-          --exclude='CHANGELOG*' \
-          --exclude='deploy.sh' \
-          --exclude='composer.phar' \
-          --exclude='composer-setup.php' \
-          . /tmp/build/${APP_ID}/
+          mkdir -p /tmp/build/${APP_ID}
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='RELEASE.md' \
+            --exclude='*.md' \
+            --exclude='CHANGELOG*' \
+            --exclude='deploy.sh' \
+            --exclude='composer.phar' \
+            . /tmp/build/${APP_ID}/
 
-        tar -czf "/tmp/${ARCHIVE}" -C /tmp/build "${APP_ID}"
-        echo "archive=/tmp/${ARCHIVE}" >> "$GITHUB_OUTPUT"
-        echo "app_id=${APP_ID}" >> "$GITHUB_OUTPUT"
-      id: build
+          tar -czf "/tmp/${ARCHIVE}" -C /tmp/build "${APP_ID}"
+          echo "archive=/tmp/${ARCHIVE}" >> "$GITHUB_OUTPUT"
+          echo "app_id=${APP_ID}" >> "$GITHUB_OUTPUT"
 
-    - name: Sign the archive
-      env:
-        NC_PRIVATE_KEY: ${{ secrets.NC_PRIVATE_KEY }}
-      run: |
-        echo "$NC_PRIVATE_KEY" > /tmp/nc_app.key
-        chmod 600 /tmp/nc_app.key
-        SIGNATURE=$(openssl dgst -sha512 -sign /tmp/nc_app.key "${{ steps.build.outputs.archive }}" | openssl base64 | tr -d '\n')
-        rm /tmp/nc_app.key
-        echo "signature=${SIGNATURE}" >> "$GITHUB_OUTPUT"
-      id: sign
+      - name: Sign the archive
+        id: sign
+        # Skipped until NC_PRIVATE_KEY secret is configured (waiting for App Store certificate)
+        if: ${{ secrets.NC_PRIVATE_KEY != '' }}
+        env:
+          NC_PRIVATE_KEY: ${{ secrets.NC_PRIVATE_KEY }}
+        run: |
+          echo "$NC_PRIVATE_KEY" > /tmp/nc_app.key
+          chmod 600 /tmp/nc_app.key
+          SIGNATURE=$(openssl dgst -sha512 -sign /tmp/nc_app.key "${{ steps.build.outputs.archive }}" | openssl base64 | tr -d '\n')
+          rm /tmp/nc_app.key
+          echo "signature=${SIGNATURE}" >> "$GITHUB_OUTPUT"
 
-    - name: Extract changelog for this version
-      id: changelog
-      run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        NOTES=$(awk "/^## ${VERSION}/,/^## [0-9]/" CHANGELOG.md | head -n -1 | tail -n +2)
-        echo "notes<<EOF" >> "$GITHUB_OUTPUT"
-        echo "$NOTES" >> "$GITHUB_OUTPUT"
-        echo "EOF" >> "$GITHUB_OUTPUT"
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          NOTES=$(awk "/^## ${VERSION}/,/^## [0-9]/" CHANGELOG.md | grep -v "^## ${VERSION}" | grep -v "^## [0-9]" | sed '/^$/N;/^\n$/d')
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: ${{ steps.build.outputs.archive }}
-        body: |
-          ${{ steps.changelog.outputs.notes }}
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: ${{ steps.build.outputs.archive }}
+          body: |
+            ${{ steps.changelog.outputs.notes }}
 
-          ---
-          **Nextcloud App Store signature:**
-          ```
-          ${{ steps.sign.outputs.signature }}
-          ```
+            ${{ steps.sign.outputs.signature && format('---
+            **Nextcloud App Store signature:**
+            ```
+            {0}
+            ```', steps.sign.outputs.signature) || '' }}
