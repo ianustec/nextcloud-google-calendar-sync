@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.4 – 2026-05-23
+
+### Changed
+- Added PHPDoc to all lib/ classes and methods (ConfigService, SyncEngine, GoogleCalendarService, NextcloudCalendarService, IcalConverter, GoogleSyncSkipException, CalendarSyncJob, AdminSettingsController, Application)
+
 ## 1.0.3 – 2026-05-23
 
 ### Fixed

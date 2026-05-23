@@ -21,7 +21,7 @@ A single Google Service Account with Domain-Wide Delegation impersonates all use
 - Cron-based automatic sync + manual "Sync Now" button
 
 Developed by [IANUSTEC](https://ianustec.com) as part of our open-source initiative to help companies migrate from Google and Microsoft to self-hosted infrastructure.]]></description>
-    <version>1.0.3</version>
+    <version>1.0.4</version>
     <licence>AGPL-3.0-or-later</licence>
     <author mail="opensource@ianustec.com" homepage="https://ianustec.com">IANUSTEC</author>
     <documentation>

@@ -10,18 +10,43 @@ use Sabre\VObject\Component\VCalendar;
 use Sabre\VObject\Component\VEvent;
 use Sabre\VObject\Reader;
 
+/**
+ * Converts between Google Calendar API Event objects and iCalendar strings.
+ *
+ * Uses sabre/vobject for iCal parsing and serialisation. Key concerns:
+ *
+ * All-day events: Google represents them as date-only strings ("YYYY-MM-DD").
+ * The iCal DATE value type requires the compact form "YYYYMMDD" with no
+ * separators, so dashes are stripped before writing DTSTART/DTEND.
+ *
+ * Google Meet links: extracted from hangoutLink (simplest form) or from
+ * conferenceData.entryPoints. They are written as:
+ *   URL       for generic calendar client support.
+ *   CONFERENCE (RFC 7986) for Nextcloud Calendar's video call button.
+ *   Appended to DESCRIPTION as plain text for clients that support neither.
+ *
+ * Recurrence: RRULE strings are passed through verbatim. Expansion of
+ * recurring instances is handled by Google (singleEvents=true in listEvents)
+ * and by Nextcloud CalDAV clients respectively.
+ */
 class IcalConverter {
+
+    /**
+     * Converts a Google Calendar Event to an iCalendar string.
+     *
+     * @param Event  $event Google event to convert.
+     * @param string $uid   UID to assign to the VEVENT component.
+     * @return string Serialised iCalendar data (VCALENDAR wrapper included).
+     */
     public function googleEventToIcal(Event $event, string $uid): string {
         $vcal = new VCalendar();
 
-        $summary = trim($event->getSummary() ?? '');
-        $location = trim($event->getLocation() ?? '');
+        $summary     = trim($event->getSummary() ?? '');
+        $location    = trim($event->getLocation() ?? '');
         $description = trim($event->getDescription() ?? '');
 
-        // Extract Meet / conference link
         $conferenceUrl = $this->extractConferenceUrl($event);
 
-        // Append Meet link to description if not already present
         if ($conferenceUrl !== null && !str_contains($description, $conferenceUrl)) {
             $description = $description !== ''
                 ? $description . "\n\nJoin: " . $conferenceUrl
@@ -38,24 +63,19 @@ class IcalConverter {
 
         $vevent = $vcal->add('VEVENT', $props);
 
-        // URL property — primary conference link or hangout link
         if ($conferenceUrl !== null) {
             $vevent->add('URL', $conferenceUrl);
-        }
-
-        // CONFERENCE property (RFC 7986) — recognised by Nextcloud Calendar
-        if ($conferenceUrl !== null) {
             $vevent->add('CONFERENCE', $conferenceUrl, [
-                'VALUE' => 'URI',
+                'VALUE'   => 'URI',
                 'FEATURE' => 'VIDEO',
-                'LABEL' => 'Google Meet',
+                'LABEL'   => 'Google Meet',
             ]);
         }
 
         $this->applyGoogleDatesToVEvent($vevent, $event);
 
         if ($event->getUpdated()) {
-            $vevent->DTSTAMP = $this->toSabreDateTime($event->getUpdated());
+            $vevent->DTSTAMP      = $this->toSabreDateTime($event->getUpdated());
             $vevent->LASTMODIFIED = $this->toSabreDateTime($event->getUpdated());
         }
 
@@ -66,14 +86,22 @@ class IcalConverter {
         return $vcal->serialize();
     }
 
+    /**
+     * Resolves the best available video conference URL from a Google Event.
+     *
+     * Preference order:
+     *   1. hangoutLink (direct Google Meet URL, always present for Meet events).
+     *   2. conferenceData.entryPoints of type "video" or "more".
+     *
+     * @param Event $event Google event to inspect.
+     * @return string|null Conference URL or null if none found.
+     */
     private function extractConferenceUrl(Event $event): ?string {
-        // hangoutLink is the simplest Google Meet URL
         $hangout = $event->getHangoutLink();
         if ($hangout !== null && $hangout !== '') {
             return $hangout;
         }
 
-        // conferenceData.entryPoints contains video/phone/etc
         $conferenceData = $event->getConferenceData();
         if ($conferenceData === null) {
             return null;
@@ -89,6 +117,18 @@ class IcalConverter {
         return null;
     }
 
+    /**
+     * Parses an iCalendar string and maps its properties onto a Google Event.
+     *
+     * When $existing is provided the method updates it in place rather than
+     * creating a new instance, which is useful for event updates where the
+     * Google event ID must be preserved.
+     *
+     * @param string    $icalData Raw iCalendar data.
+     * @param Event|null $existing Existing Google event to update, or null to create a new one.
+     * @return Event Populated Google Calendar Event.
+     * @throws \InvalidArgumentException If the iCal data contains no VEVENT component.
+     */
     public function icalToGoogleEvent(string $icalData, ?Event $existing = null): Event {
         $event = $existing ?? new Event();
         $vcal = Reader::read($icalData);
@@ -137,6 +177,13 @@ class IcalConverter {
         return $event;
     }
 
+    /**
+     * Extracts the UID property from an iCalendar string.
+     *
+     * @param string $icalData Raw iCalendar data.
+     * @return string UID value.
+     * @throws \InvalidArgumentException If the data contains no VEVENT or no UID.
+     */
     public function extractUid(string $icalData): string {
         $vcal = Reader::read($icalData);
         /** @var VEvent|null $vevent */
@@ -147,6 +194,15 @@ class IcalConverter {
         return (string)$vevent->UID;
     }
 
+    /**
+     * Extracts the last-modified timestamp from an iCalendar string.
+     *
+     * Falls back to DTSTAMP when LASTMODIFIED is absent, and returns null
+     * when neither property is present.
+     *
+     * @param string $icalData Raw iCalendar data.
+     * @return \DateTimeImmutable|null Last modified timestamp or null.
+     */
     public function extractLastModified(string $icalData): ?\DateTimeImmutable {
         $vcal = Reader::read($icalData);
         /** @var VEvent|null $vevent */
@@ -163,6 +219,12 @@ class IcalConverter {
         return null;
     }
 
+    /**
+     * Extracts the last-modified timestamp from a Google Calendar Event.
+     *
+     * @param Event $event Google event.
+     * @return \DateTimeImmutable|null Updated timestamp or null if absent.
+     */
     public function googleLastModified(Event $event): ?\DateTimeImmutable {
         $updated = $event->getUpdated();
         if ($updated === null) {
@@ -171,13 +233,21 @@ class IcalConverter {
         return new \DateTimeImmutable($updated);
     }
 
+    /**
+     * Writes DTSTART and DTEND onto a VEvent from a Google Event's date/dateTime fields.
+     *
+     * All-day events use the iCal DATE value type (compact "YYYYMMDD" format).
+     * Timed events use DATETIME with UTC normalisation.
+     *
+     * @param VEvent $vevent Target VEvent component.
+     * @param Event  $event  Source Google event.
+     */
     private function applyGoogleDatesToVEvent(VEvent $vevent, Event $event): void {
         $start = $event->getStart();
-        $end = $event->getEnd();
+        $end   = $event->getEnd();
 
         if ($start !== null) {
             if ($start->getDate() !== null) {
-                // iCal DATE format: YYYYMMDD (no dashes)
                 $vevent->add('DTSTART', str_replace('-', '', $start->getDate()), ['VALUE' => 'DATE']);
             } elseif ($start->getDateTime() !== null) {
                 $vevent->DTSTART = $this->toSabreDateTime($start->getDateTime());
@@ -193,6 +263,13 @@ class IcalConverter {
         }
     }
 
+    /**
+     * Converts an RFC3339 or ISO 8601 datetime string to the compact UTC format
+     * expected by sabre/vobject for DATETIME properties ("YmdTHisZ").
+     *
+     * @param string $value Input datetime string.
+     * @return string Formatted UTC datetime string.
+     */
     private function toSabreDateTime(string $value): string {
         return (new \DateTimeImmutable($value))->format('Ymd\THis\Z');
     }

@@ -15,7 +15,18 @@ use OCP\IRequest;
 use OCP\IUserManager;
 use Psr\Container\ContainerInterface;
 
+/**
+ * HTTP controller for the admin settings panel.
+ *
+ * All endpoints require admin privileges (enforced by @AdminRequired).
+ *
+ * SyncEngine is resolved lazily from the DI container rather than being
+ * injected in the constructor. This isolates the controller from potential
+ * dependency chain failures (e.g. missing vendor/ during deployment) and
+ * avoids slowing down every settings page load with unnecessary instantiation.
+ */
 class AdminSettingsController extends Controller {
+
     public function __construct(
         IRequest $request,
         private ConfigService $configService,
@@ -27,8 +38,23 @@ class AdminSettingsController extends Controller {
     }
 
     /**
+     * Persists all admin settings submitted from the settings form.
+     *
+     * The SA JSON key is only updated when a non-empty value is provided,
+     * so reloading the form without uploading a new file does not erase it.
+     *
      * @NoAdminRequired
      * @AdminRequired
+     *
+     * @param string $googleDomain        Google Workspace domain (e.g. "example.com").
+     * @param int    $syncIntervalMinutes Background job interval in minutes.
+     * @param string $userEmailSuffix     Optional suffix to append to NC usernames.
+     * @param string $saJsonKey           Service Account JSON key (raw JSON string).
+     * @param string $enabled             "yes" or "no".
+     * @param string $syncNcToGoogle      "yes" or "no".
+     * @param string $syncGoogleToNc      "yes" or "no".
+     * @param string $syncFromDate        ISO date string (YYYY-MM-DD) or empty for no limit.
+     * @return DataResponse
      */
     public function save(
         string $googleDomain = '',
@@ -49,7 +75,6 @@ class AdminSettingsController extends Controller {
         if ($syncFromDate !== '') {
             $this->configService->setSyncFromDate($syncFromDate);
         }
-
         if ($saJsonKey !== '') {
             $this->configService->setServiceAccountKeyJson($saJsonKey);
         }
@@ -58,8 +83,14 @@ class AdminSettingsController extends Controller {
     }
 
     /**
+     * Triggers a synchronous full sync for all users (legacy bulk endpoint).
+     *
+     * Kept for backward compatibility. The preferred approach is sequential
+     * per-user calls via syncSingleUser, which provides live progress in the UI.
+     *
      * @NoAdminRequired
      * @AdminRequired
+     * @return DataResponse Sync summary with synced, skipped, and failed counts.
      */
     public function syncNow(): DataResponse {
         if (!$this->configService->hasServiceAccountKey()) {
@@ -98,33 +129,41 @@ class AdminSettingsController extends Controller {
         });
 
         return new DataResponse([
-            'status' => 'ok',
-            'synced' => $synced,
+            'status'      => 'ok',
+            'synced'      => $synced,
             'syncedUsers' => $syncedUsers,
-            'skipped' => $skipped,
-            'failed' => $failed,
-            'errors' => $errors,
+            'skipped'     => $skipped,
+            'failed'      => $failed,
+            'errors'      => $errors,
         ]);
     }
 
     /**
+     * Returns a deduplicated list of users eligible for sync.
+     *
+     * Only users whose resolved email ends with the configured Google domain
+     * are included. When multiple Nextcloud accounts map to the same email
+     * (e.g. "m.mazza" and "m.mazza@domain.com"), the account whose UID
+     * already contains "@" is preferred because it is more likely to own
+     * the CalDAV calendars.
+     *
      * @NoAdminRequired
      * @AdminRequired
+     * @return DataResponse List of {uid, email, displayName} objects.
      */
     public function listUsers(): DataResponse {
         $byEmail = [];
-        $domain = $this->configService->getGoogleDomain();
+        $domain  = $this->configService->getGoogleDomain();
 
         $this->userManager->callForAllUsers(function ($user) use (&$byEmail, $domain): void {
             if (!$user->isEnabled()) {
                 return;
             }
-            $uid = $user->getUID();
+            $uid   = $user->getUID();
             $email = $this->configService->resolveUserEmail($uid);
             if ($domain !== '' && !str_ends_with($email, '@' . $domain)) {
                 return;
             }
-            // Prefer the account whose uid IS the full email (most likely the real account with calendars)
             if (!isset($byEmail[$email]) || str_contains($uid, '@')) {
                 $byEmail[$email] = ['uid' => $uid, 'email' => $email, 'displayName' => $user->getDisplayName()];
             }
@@ -134,8 +173,16 @@ class AdminSettingsController extends Controller {
     }
 
     /**
+     * Runs sync for a single user.
+     *
+     * Called sequentially by the admin UI for each user in the list so that
+     * progress can be displayed in real time without a single long-running request.
+     *
      * @NoAdminRequired
      * @AdminRequired
+     *
+     * @param string $userId Nextcloud user ID to sync.
+     * @return DataResponse Status "synced", "skipped", or "error" with a message.
      */
     public function syncSingleUser(string $userId = ''): DataResponse {
         if ($userId === '') {
@@ -145,10 +192,10 @@ class AdminSettingsController extends Controller {
             return new DataResponse(['status' => 'error', 'message' => 'SA key not configured'], 400);
         }
 
-        set_time_limit(120);
+        set_time_limit(3600);
 
-        /** @var \OCA\NeuraGoogleCalendarSync\Service\SyncEngine $syncEngine */
-        $syncEngine = $this->container->get(\OCA\NeuraGoogleCalendarSync\Service\SyncEngine::class);
+        /** @var SyncEngine $syncEngine */
+        $syncEngine = $this->container->get(SyncEngine::class);
 
         try {
             $pairs = $syncEngine->syncUser($userId);
@@ -164,8 +211,17 @@ class AdminSettingsController extends Controller {
     }
 
     /**
+     * Verifies that the configured Service Account can successfully impersonate
+     * a user in the domain and list their Google calendars.
+     *
+     * Uses the first enabled Nextcloud user as the test subject when $testUser
+     * is not provided.
+     *
      * @NoAdminRequired
      * @AdminRequired
+     *
+     * @param string $testUser Optional user ID to test. Falls back to the first enabled user.
+     * @return DataResponse Status "ok" with the tested email, or "error" with the exception message.
      */
     public function testConnection(string $testUser = ''): DataResponse {
         if ($testUser === '') {
@@ -184,6 +240,11 @@ class AdminSettingsController extends Controller {
         }
     }
 
+    /**
+     * Returns the UID of the first enabled Nextcloud user found by callForSeenUsers.
+     *
+     * @return string|null UID or null if no enabled users exist.
+     */
     private function findFirstUserId(): ?string {
         $found = null;
         $this->userManager->callForSeenUsers(function ($user) use (&$found): void {
