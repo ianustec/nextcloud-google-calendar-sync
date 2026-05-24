@@ -248,14 +248,20 @@ class SyncEngine {
                 $ical = $this->icalConverter->googleEventToIcal($gEvent, $uid);
                 $etag = $this->ncService->createEvent($ncCalendarId, $uid, $ical);
 
-                // Guard against duplicate mapping rows that can appear when a previous
-                // sync run created the NC object but then failed before writing the row.
-                $existingMapping = $this->eventMappingMapper->findByGoogleEvent($googleCalendarId, $gEventId);
+                // Guard against duplicate mapping rows from partial failures on previous runs.
+                // Check both indexes: by Google event ID (normal case) and by NC UID (stale
+                // row where the Google side was remapped or the calendar ID changed).
+                $existingMapping = $this->eventMappingMapper->findByGoogleEvent($googleCalendarId, $gEventId)
+                    ?? $this->eventMappingMapper->findByNcEvent($ncCalendarId, $uid);
                 if ($existingMapping !== null) {
+                    $existingMapping->setNcEventUid($uid);
+                    $existingMapping->setGoogleCalendarId($googleCalendarId);
+                    $existingMapping->setGoogleEventId($gEventId);
                     $existingMapping->setNcEtag($etag);
                     $existingMapping->setGoogleEtag($gEvent->getEtag());
                     $this->eventMappingMapper->update($existingMapping);
                     $mappingByNcUid[$uid] = $existingMapping;
+                    $mappingByGoogleId[$gEventId] = $existingMapping;
                 } else {
                     $newMapping = new EventMapping();
                     $newMapping->setUserId($userId);
@@ -267,6 +273,7 @@ class SyncEngine {
                     $newMapping->setGoogleEtag($gEvent->getEtag());
                     $this->eventMappingMapper->insert($newMapping);
                     $mappingByNcUid[$uid] = $newMapping;
+                    $mappingByGoogleId[$gEventId] = $newMapping;
                 }
                 continue;
             }
