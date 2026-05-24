@@ -255,6 +255,7 @@ class SyncEngine {
                     $existingMapping->setNcEtag($etag);
                     $existingMapping->setGoogleEtag($gEvent->getEtag());
                     $this->eventMappingMapper->update($existingMapping);
+                    $mappingByNcUid[$uid] = $existingMapping;
                 } else {
                     $newMapping = new EventMapping();
                     $newMapping->setUserId($userId);
@@ -265,6 +266,7 @@ class SyncEngine {
                     $newMapping->setNcEtag($etag);
                     $newMapping->setGoogleEtag($gEvent->getEtag());
                     $this->eventMappingMapper->insert($newMapping);
+                    $mappingByNcUid[$uid] = $newMapping;
                 }
                 continue;
             }
