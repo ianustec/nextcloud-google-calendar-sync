@@ -209,6 +209,9 @@ class SyncEngine {
             $mappingByGoogleId[$em->getGoogleEventId()] = $em;
         }
 
+        $syncGoogleToNc = $this->configService->isSyncGoogleToNc();
+        $syncNcToGoogle = $this->configService->isSyncNcToGoogle();
+
         // Pass 1: iterate Google events and apply changes to Nextcloud.
         foreach ($googleResult['events'] as $gEvent) {
             $gEventId = $gEvent->getId();
@@ -221,7 +224,7 @@ class SyncEngine {
             // Google marks deleted events as "cancelled" rather than omitting them.
             // We need showDeleted=true in listEvents to receive these tombstones.
             if ($gEvent->getStatus() === 'cancelled') {
-                if ($em !== null) {
+                if ($syncGoogleToNc && $em !== null) {
                     try {
                         $this->ncService->deleteEvent($ncCalendarId, $em->getNcEventUid());
                     } catch (\Throwable $e) {
@@ -237,6 +240,9 @@ class SyncEngine {
             }
 
             if ($em === null) {
+                if (!$syncGoogleToNc) {
+                    continue;
+                }
                 // New Google event with no mapping: create it in NC and record the pair.
                 $uid  = $this->generateUid($gEventId);
                 $ical = $this->icalConverter->googleEventToIcal($gEvent, $uid);
@@ -280,6 +286,10 @@ class SyncEngine {
             $ncChanged = ($em->getNcEtag() ?? '') !== $ncEvent['etag'];
             $gChanged  = ($em->getGoogleEtag() ?? '') !== ($gEvent->getEtag() ?? '');
 
+            if (!$syncGoogleToNc && !$syncNcToGoogle) {
+                continue;
+            }
+
             if ($ncChanged && $gChanged) {
                 // True conflict: both sides changed since the last sync.
                 // Use last-modified as the tiebreaker (last-write-wins).
@@ -287,14 +297,14 @@ class SyncEngine {
                 // locally entered data and avoid surprising users.
                 $ncLm = $this->icalConverter->extractLastModified($ncEvent['data']);
                 $gLm  = $this->icalConverter->googleLastModified($gEvent);
-                if ($this->ncWins($ncLm, $gLm)) {
+                if ($syncNcToGoogle && $this->ncWins($ncLm, $gLm)) {
                     $this->pushNcToGoogle($userEmail, $googleCalendarId, $ncEvent, $em);
-                } else {
+                } elseif ($syncGoogleToNc) {
                     $this->pushGoogleToNc($ncCalendarId, $gEvent, $em);
                 }
-            } elseif ($ncChanged) {
+            } elseif ($ncChanged && $syncNcToGoogle) {
                 $this->pushNcToGoogle($userEmail, $googleCalendarId, $ncEvent, $em);
-            } elseif ($gChanged) {
+            } elseif ($gChanged && $syncGoogleToNc) {
                 $this->pushGoogleToNc($ncCalendarId, $gEvent, $em);
             }
             // No changes on either side: nothing to do for this event.
@@ -302,6 +312,15 @@ class SyncEngine {
 
         // Pass 2: push NC events that have no mapping yet to Google.
         // These are events created locally in Nextcloud since the last sync.
+        if (!$syncNcToGoogle) {
+            // NC→Google direction disabled: skip entirely.
+            $mapping->setGoogleSyncToken($googleResult['nextSyncToken'] ?? $mapping->getGoogleSyncToken());
+            $mapping->setNcCtag($ncCal['ctag'] ?? null);
+            $mapping->setLastSyncedAt(time());
+            $this->calendarMappingMapper->update($mapping);
+            return;
+        }
+
         foreach ($ncEvents as $ncEvent) {
             try {
                 $uid = $this->icalConverter->extractUid($ncEvent['data']);
