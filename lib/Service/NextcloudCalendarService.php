@@ -132,11 +132,65 @@ class NextcloudCalendarService {
     /**
      * Removes a calendar object from the given calendar.
      *
+     * CalDAV clients are free to use any filename as the object URI regardless
+     * of the event UID, so the derived URI (uid + ".ics") may not match the
+     * actual stored filename. This method first tries the derived URI, then
+     * falls back to scanning all objects to find the one whose iCal UID matches.
+     *
      * @param string $calendarId Nextcloud calendar ID.
      * @param string $uid        UID of the event to delete.
      */
     public function deleteEvent(string $calendarId, string $uid): void {
-        $this->calDavBackend->deleteCalendarObject((int)$calendarId, $this->uidToUri($uid));
+        $id  = (int)$calendarId;
+        $uri = $this->resolveUri($id, $uid);
+        if ($uri !== null) {
+            $this->calDavBackend->deleteCalendarObject($id, $uri);
+        }
+    }
+
+    /**
+     * Resolves the actual DAV URI for a given UID.
+     *
+     * Returns null when no matching object is found.
+     *
+     * @param int    $calendarId Nextcloud calendar ID (integer).
+     * @param string $uid        Event UID to look up.
+     * @return string|null Actual URI or null.
+     */
+    private function resolveUri(int $calendarId, string $uid): ?string {
+        // Fast path: URI derived from UID (most clients follow this convention).
+        $derived = $this->uidToUri($uid);
+        if ($this->calDavBackend->getCalendarObject($calendarId, $derived) !== null) {
+            return $derived;
+        }
+        // Slow path: scan all objects to find the one with a matching UID.
+        foreach ($this->calDavBackend->getCalendarObjects($calendarId) as $obj) {
+            $full = $this->calDavBackend->getCalendarObject($calendarId, $obj['uri']);
+            if ($full === null) {
+                continue;
+            }
+            try {
+                if ($this->extractUidFromIcal((string)($full['calendardata'] ?? '')) === $uid) {
+                    return (string)$obj['uri'];
+                }
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Extracts the UID from raw iCalendar data without a full Sabre parse.
+     *
+     * @param string $icalData Raw iCalendar payload.
+     * @return string|null UID value or null if not found.
+     */
+    private function extractUidFromIcal(string $icalData): ?string {
+        if (preg_match('/^UID:(.+)$/m', $icalData, $m)) {
+            return trim($m[1]);
+        }
+        return null;
     }
 
     /**

@@ -55,7 +55,7 @@ class ConfigService {
 
     /** Minimum enforced value is 5 minutes to avoid hammering the Google API. */
     public function getSyncIntervalMinutes(): int {
-        return max(5, (int)$this->config->getAppValue(Application::APP_ID, self::KEY_SYNC_INTERVAL, '15'));
+        return max(5, (int)$this->config->getAppValue(Application::APP_ID, self::KEY_SYNC_INTERVAL, '5'));
     }
 
     public function setSyncIntervalMinutes(int $minutes): void {
@@ -143,7 +143,8 @@ class ConfigService {
     public function getSyncFromDate(): ?\DateTimeImmutable {
         $val = trim($this->config->getAppValue(Application::APP_ID, self::KEY_SYNC_FROM_DATE, ''));
         if ($val === '') {
-            return null;
+            // Default: sync from today so a fresh install does not import all past events.
+            return (new \DateTimeImmutable())->setTime(0, 0, 0);
         }
         $dt = \DateTimeImmutable::createFromFormat('Y-m-d', $val);
         return $dt !== false ? $dt->setTime(0, 0, 0) : null;
