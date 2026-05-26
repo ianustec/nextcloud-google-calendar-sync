@@ -180,6 +180,69 @@ class IcalConverter {
     }
 
     /**
+     * Returns a normalized deduplication key for an NC iCal event.
+     *
+     * Key format: "summary_lowercase|start_utc_unix_timestamp" for timed events,
+     * or "summary_lowercase|date_YYYY-MM-DD" for all-day events.
+     * Returns null when the event cannot be parsed or has no DTSTART.
+     *
+     * @param string $icalData Raw iCalendar data.
+     * @return string|null Deduplication key or null.
+     */
+    public function ncEventKey(string $icalData): ?string {
+        try {
+            $vcal = Reader::read($icalData);
+            /** @var VEvent|null $vevent */
+            $vevent = $vcal->VEVENT ?? null;
+            if ($vevent === null || !isset($vevent->DTSTART)) {
+                return null;
+            }
+            $summary = mb_strtolower(trim((string)($vevent->SUMMARY ?? '')));
+            $allDay  = !str_contains((string)$vevent->DTSTART, 'T');
+            if ($allDay) {
+                return $summary . '|' . $vevent->DTSTART->getDateTime()->format('Y-m-d');
+            }
+            $ts = $vevent->DTSTART->getDateTime()
+                ->setTimezone(new \DateTimeZone('UTC'))
+                ->getTimestamp();
+            return $summary . '|' . $ts;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Returns a normalized deduplication key for a Google Calendar event.
+     *
+     * Uses the same format as ncEventKey() so the two indexes can be compared
+     * directly during cross-direction deduplication.
+     *
+     * @param Event $event Google Calendar event.
+     * @return string|null Deduplication key or null.
+     */
+    public function googleEventKey(Event $event): ?string {
+        $summary = mb_strtolower(trim($event->getSummary() ?? ''));
+        $start   = $event->getStart();
+        if ($start === null) {
+            return null;
+        }
+        if ($start->getDate() !== null) {
+            return $summary . '|' . $start->getDate();
+        }
+        if ($start->getDateTime() !== null) {
+            try {
+                $ts = (new \DateTimeImmutable($start->getDateTime()))
+                    ->setTimezone(new \DateTimeZone('UTC'))
+                    ->getTimestamp();
+                return $summary . '|' . $ts;
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Extracts the UID property from an iCalendar string.
      *
      * @param string $icalData Raw iCalendar data.
@@ -270,10 +333,19 @@ class IcalConverter {
      * Converts an RFC3339 or ISO 8601 datetime string to the compact UTC format
      * expected by sabre/vobject for DATETIME properties ("YmdTHisZ").
      *
+     * The input may carry any timezone offset (e.g. "+02:00" for CEST).
+     * setTimezone('UTC') performs the actual conversion before formatting so
+     * that the trailing "Z" (UTC indicator) is accurate. Without this step,
+     * a CEST event at 10:00+02:00 would be serialised as "20...T100000Z",
+     * which iCal clients interpret as 10:00 UTC — two hours ahead of the
+     * original local time.
+     *
      * @param string $value Input datetime string.
      * @return string Formatted UTC datetime string.
      */
     private function toSabreDateTime(string $value): string {
-        return (new \DateTimeImmutable($value))->format('Ymd\THis\Z');
+        return (new \DateTimeImmutable($value))
+            ->setTimezone(new \DateTimeZone('UTC'))
+            ->format('Ymd\THis\Z');
     }
 }

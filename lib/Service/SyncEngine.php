@@ -74,7 +74,7 @@ class SyncEngine {
             $ncCalendars = $this->ncService->listCalendars($userId);
         } catch (\Throwable $e) {
             if (GoogleSyncSkipException::shouldSkip($e)) {
-                throw new GoogleSyncSkipException("Skipped $userId", $e);
+                throw new GoogleSyncSkipException("Skipped $userId", 0, $e);
             }
             throw $e;
         }
@@ -87,7 +87,7 @@ class SyncEngine {
             $googleCalendars = $this->googleService->listCalendars($userEmail);
         } catch (\Throwable $e) {
             if (GoogleSyncSkipException::shouldSkip($e)) {
-                throw new GoogleSyncSkipException("Skipped $userId", $e);
+                throw new GoogleSyncSkipException("Skipped $userId", 0, $e);
             }
             throw $e;
         }
@@ -189,6 +189,7 @@ class SyncEngine {
         // while iterating the Google event list below.
         $ncEvents = $this->ncService->listEvents($ncCalendarId);
         $ncByUid = [];
+        $ncByKey = [];
         foreach ($ncEvents as $ncEvent) {
             try {
                 $uid = $this->icalConverter->extractUid($ncEvent['data']);
@@ -196,6 +197,11 @@ class SyncEngine {
             } catch (\Throwable) {
                 // Malformed iCal objects are skipped; they cannot be mapped.
                 continue;
+            }
+            // Secondary index by (summary, start UTC) for cross-direction deduplication.
+            $key = $this->icalConverter->ncEventKey($ncEvent['data']);
+            if ($key !== null) {
+                $ncByKey[$key] = $ncEvent;
             }
         }
 
@@ -207,6 +213,19 @@ class SyncEngine {
         foreach ($eventMappings as $em) {
             $mappingByNcUid[$em->getNcEventUid()]       = $em;
             $mappingByGoogleId[$em->getGoogleEventId()] = $em;
+        }
+
+        // Build a (summary, start UTC) index over non-cancelled Google events for
+        // deduplication when pushing NC events to Google in pass 2.
+        $googleByKey = [];
+        foreach ($googleResult['events'] as $gev) {
+            if ($gev->getStatus() === 'cancelled') {
+                continue;
+            }
+            $key = $this->icalConverter->googleEventKey($gev);
+            if ($key !== null) {
+                $googleByKey[$key] = $gev;
+            }
         }
 
         $syncGoogleToNc = $this->configService->isSyncGoogleToNc();
@@ -243,14 +262,60 @@ class SyncEngine {
                 if (!$syncGoogleToNc) {
                     continue;
                 }
-                // New Google event with no mapping: create it in NC and record the pair.
+
+                // Before creating a new NC event, check whether an NC event with the
+                // same summary and start time already exists (deduplication guard).
+                // This prevents duplicates when the mapping table has been cleared or
+                // when the first sync runs against a calendar that was pre-populated.
+                $gKey        = $this->icalConverter->googleEventKey($gEvent);
+                $matchedNcEv = ($gKey !== null) ? ($ncByKey[$gKey] ?? null) : null;
+
+                if ($matchedNcEv !== null) {
+                    // Matching NC event found: link it instead of creating a duplicate.
+                    try {
+                        $matchedUid = $this->icalConverter->extractUid($matchedNcEv['data']);
+                    } catch (\Throwable) {
+                        $matchedUid = null;
+                    }
+                    if ($matchedUid !== null) {
+                        $existingMapping = $this->eventMappingMapper->findByGoogleEvent($googleCalendarId, $gEventId)
+                            ?? $this->eventMappingMapper->findByNcEvent($ncCalendarId, $matchedUid);
+                        if ($existingMapping !== null) {
+                            $existingMapping->setNcEventUid($matchedUid);
+                            $existingMapping->setGoogleCalendarId($googleCalendarId);
+                            $existingMapping->setGoogleEventId($gEventId);
+                            $existingMapping->setNcEtag($matchedNcEv['etag']);
+                            $existingMapping->setGoogleEtag($gEvent->getEtag());
+                            $this->eventMappingMapper->update($existingMapping);
+                        } else {
+                            $existingMapping = new EventMapping();
+                            $existingMapping->setUserId($userId);
+                            $existingMapping->setNcCalendarId($ncCalendarId);
+                            $existingMapping->setNcEventUid($matchedUid);
+                            $existingMapping->setGoogleCalendarId($googleCalendarId);
+                            $existingMapping->setGoogleEventId($gEventId);
+                            $existingMapping->setNcEtag($matchedNcEv['etag']);
+                            $existingMapping->setGoogleEtag($gEvent->getEtag());
+                            $this->eventMappingMapper->insert($existingMapping);
+                        }
+                        $mappingByNcUid[$matchedUid]   = $existingMapping;
+                        $mappingByGoogleId[$gEventId]  = $existingMapping;
+                        $this->logger->info('Dedup Google→NC: linked existing NC event', [
+                            'user'    => $userId,
+                            'ncUid'   => $matchedUid,
+                            'gId'     => $gEventId,
+                            'summary' => $gEvent->getSummary(),
+                        ]);
+                        continue;
+                    }
+                }
+
+                // No existing NC event found: create it and record the mapping.
                 $uid  = $this->generateUid($gEventId);
                 $ical = $this->icalConverter->googleEventToIcal($gEvent, $uid);
                 $etag = $this->ncService->createEvent($ncCalendarId, $uid, $ical);
 
                 // Guard against duplicate mapping rows from partial failures on previous runs.
-                // Check both indexes: by Google event ID (normal case) and by NC UID (stale
-                // row where the Google side was remapped or the calendar ID changed).
                 $existingMapping = $this->eventMappingMapper->findByGoogleEvent($googleCalendarId, $gEventId)
                     ?? $this->eventMappingMapper->findByNcEvent($ncCalendarId, $uid);
                 if ($existingMapping !== null) {
@@ -280,14 +345,29 @@ class SyncEngine {
 
             $ncEvent = $ncByUid[$em->getNcEventUid()] ?? null;
             if ($ncEvent === null) {
-                // Mapping exists but the NC object was deleted externally.
-                // Recreate it from Google to restore consistency.
-                $uid  = $em->getNcEventUid();
-                $ical = $this->icalConverter->googleEventToIcal($gEvent, $uid);
-                $etag = $this->ncService->createEvent($ncCalendarId, $uid, $ical);
-                $em->setNcEtag($etag);
-                $em->setGoogleEtag($gEvent->getEtag());
-                $this->eventMappingMapper->update($em);
+                // Mapping exists but NC object is gone — user deleted it in Nextcloud.
+                if ($syncNcToGoogle) {
+                    // Propagate deletion to Google and clean up the mapping.
+                    try {
+                        $this->googleService->deleteEvent($userEmail, $googleCalendarId, $em->getGoogleEventId());
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('Failed to delete Google event for NC deletion', [
+                            'gId'   => $em->getGoogleEventId(),
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                    $this->eventMappingMapper->delete($em);
+                } elseif ($syncGoogleToNc) {
+                    // NC→Google disabled: restore the NC event from Google.
+                    $uid  = $em->getNcEventUid();
+                    $ical = $this->icalConverter->googleEventToIcal($gEvent, $uid);
+                    $etag = $this->ncService->createEvent($ncCalendarId, $uid, $ical);
+                    $em->setNcEtag($etag);
+                    $em->setGoogleEtag($gEvent->getEtag());
+                    $this->eventMappingMapper->update($em);
+                } else {
+                    $this->eventMappingMapper->delete($em);
+                }
                 continue;
             }
 
@@ -342,6 +422,47 @@ class SyncEngine {
                 continue;
             }
 
+            // Before inserting into Google, check whether a Google event with the
+            // same summary and start time already exists (deduplication guard).
+            $ncKey         = $this->icalConverter->ncEventKey($ncEvent['data']);
+            $matchedGEvent = ($ncKey !== null) ? ($googleByKey[$ncKey] ?? null) : null;
+
+            if ($matchedGEvent !== null) {
+                $gEventId = $matchedGEvent->getId();
+                if ($gEventId !== null) {
+                    // Matching Google event found: link it instead of inserting a duplicate.
+                    $existingNcMapping = $this->eventMappingMapper->findByNcEvent($ncCalendarId, $uid)
+                        ?? $this->eventMappingMapper->findByGoogleEvent($googleCalendarId, $gEventId);
+                    if ($existingNcMapping !== null) {
+                        $existingNcMapping->setNcCalendarId($ncCalendarId);
+                        $existingNcMapping->setNcEventUid($uid);
+                        $existingNcMapping->setGoogleCalendarId($googleCalendarId);
+                        $existingNcMapping->setGoogleEventId($gEventId);
+                        $existingNcMapping->setNcEtag($ncEvent['etag']);
+                        $existingNcMapping->setGoogleEtag($matchedGEvent->getEtag());
+                        $this->eventMappingMapper->update($existingNcMapping);
+                    } else {
+                        $existingNcMapping = new EventMapping();
+                        $existingNcMapping->setUserId($userId);
+                        $existingNcMapping->setNcCalendarId($ncCalendarId);
+                        $existingNcMapping->setNcEventUid($uid);
+                        $existingNcMapping->setGoogleCalendarId($googleCalendarId);
+                        $existingNcMapping->setGoogleEventId($gEventId);
+                        $existingNcMapping->setNcEtag($ncEvent['etag']);
+                        $existingNcMapping->setGoogleEtag($matchedGEvent->getEtag());
+                        $this->eventMappingMapper->insert($existingNcMapping);
+                    }
+                    $this->logger->info('Dedup NC→Google: linked existing Google event', [
+                        'user'    => $userId,
+                        'ncUid'   => $uid,
+                        'gId'     => $gEventId,
+                        'summary' => $matchedGEvent->getSummary(),
+                    ]);
+                    continue;
+                }
+            }
+
+            // No matching Google event found: insert it.
             $gEvent  = $this->icalConverter->icalToGoogleEvent($ncEvent['data']);
             $created = $this->googleService->insertEvent($userEmail, $googleCalendarId, $gEvent);
 
