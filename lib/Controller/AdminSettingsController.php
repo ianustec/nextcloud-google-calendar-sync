@@ -154,17 +154,18 @@ class AdminSettingsController extends Controller {
      */
     public function listUsers(): DataResponse {
         $byEmail = [];
-        $domain  = $this->configService->getGoogleDomain();
+        $domain = $this->configService->getGoogleDomain();
 
         $this->userManager->callForAllUsers(function ($user) use (&$byEmail, $domain): void {
             if (!$user->isEnabled()) {
                 return;
             }
-            $uid   = $user->getUID();
+            $uid = $user->getUID();
             $email = $this->configService->resolveUserEmail($uid);
             if ($domain !== '' && !str_ends_with($email, '@' . $domain)) {
                 return;
             }
+            // Prefer the account whose uid IS the full email (most likely the real account with calendars)
             if (!isset($byEmail[$email]) || str_contains($uid, '@')) {
                 $byEmail[$email] = ['uid' => $uid, 'email' => $email, 'displayName' => $user->getDisplayName()];
             }
