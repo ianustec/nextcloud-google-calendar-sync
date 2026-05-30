@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.15 – 2026-05-30
+
+### Fixed
+- `icalToGoogleEvent`: handle events with `DURATION` instead of `DTEND` (Google API returned 400 "Missing end time")
+- `icalToGoogleEvent`: fallback to zero-duration end when no end time is present at all
+- NC CalDAV scheduling delivery now works correctly for users with `shareapi_only_share_with_group_members` disabled
+- Removed ghost user account that prevented `findByUri` from resolving a user's email to a principal, blocking all calendar invitation delivery
+
 ## 1.0.5 – 2026-05-23
 
 ### Changed
