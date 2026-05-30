@@ -170,6 +170,30 @@ class IcalConverter {
                     'timeZone' => $vevent->DTEND->getDateTime()->getTimezone()->getName(),
                 ]));
             }
+        } elseif (isset($vevent->DURATION) && isset($vevent->DTSTART)) {
+            // DURATION is an alternative to DTEND — compute end time from start + duration.
+            $endDt = $vevent->DTSTART->getDateTime()->add($vevent->DURATION->getDateInterval());
+            $allDay = !str_contains((string)$vevent->DTSTART, 'T');
+            if ($allDay) {
+                $event->setEnd(new EventDateTime(['date' => $endDt->format('Y-m-d')]));
+            } else {
+                $event->setEnd(new EventDateTime([
+                    'dateTime' => $endDt->format(\DateTimeInterface::RFC3339),
+                    'timeZone' => $endDt->getTimezone()->getName(),
+                ]));
+            }
+        } elseif (isset($vevent->DTSTART)) {
+            // No end time at all: use start time as end (zero-duration event).
+            $allDay = !str_contains((string)$vevent->DTSTART, 'T');
+            $startDt = $vevent->DTSTART->getDateTime();
+            if ($allDay) {
+                $event->setEnd(new EventDateTime(['date' => $startDt->modify('+1 day')->format('Y-m-d')]));
+            } else {
+                $event->setEnd(new EventDateTime([
+                    'dateTime' => $startDt->format(\DateTimeInterface::RFC3339),
+                    'timeZone' => $startDt->getTimezone()->getName(),
+                ]));
+            }
         }
 
         if (isset($vevent->RRULE)) {
