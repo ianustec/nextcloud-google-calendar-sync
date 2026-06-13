@@ -417,8 +417,24 @@ class SyncEngine {
                 continue;
             }
 
-            // Already handled in pass 1 (mapping existed).
-            if (isset($mappingByNcUid[$uid])) {
+            // Already mapped. Pass 1 only reconciles events whose Google counterpart
+            // appears in the incremental result; an NC-only modification (Google side
+            // unchanged) never shows up there. Detect it here by comparing the stored
+            // NC etag and push the update to Google.
+            $existingEm = $mappingByNcUid[$uid] ?? null;
+            if ($existingEm !== null) {
+                if (($existingEm->getNcEtag() ?? '') !== $ncEvent['etag']) {
+                    try {
+                        $this->pushNcToGoogle($userEmail, $googleCalendarId, $ncEvent, $existingEm);
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('Failed to push NC modification to Google', [
+                            'user'  => $userId,
+                            'ncUid' => $uid,
+                            'gId'   => $existingEm->getGoogleEventId(),
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
                 continue;
             }
 

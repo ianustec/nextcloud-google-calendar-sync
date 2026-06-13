@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.16 – 2026-06-13
+
+### Fixed
+- `updateEvent`/`getEvent`: resolve the actual stored CalDAV URI instead of assuming `rawurlencode(uid).ics`. Cal.com (and other clients) store objects under a filename that drops the `@domain` part of the UID, causing "Calendarobject does not exist" on Google→NC updates and aborting the whole calendar sync.
+- NC→Google: push modifications of already-mapped NC events to Google. Pass 1 only reconciles events present in the incremental Google result, so NC-only edits (Google side unchanged) were never propagated.
+
 ## 1.0.15 – 2026-05-30
 
 ### Fixed
