@@ -240,6 +240,7 @@ class SyncEngine {
 
             $em = $mappingByGoogleId[$gEventId] ?? null;
 
+            try {
             // Google marks deleted events as "cancelled" rather than omitting them.
             // We need showDeleted=true in listEvents to receive these tombstones.
             if ($gEvent->getStatus() === 'cancelled') {
@@ -397,6 +398,16 @@ class SyncEngine {
                 $this->pushGoogleToNc($ncCalendarId, $gEvent, $em);
             }
             // No changes on either side: nothing to do for this event.
+            } catch (\Throwable $e) {
+                // Isolate per-event failures so one malformed event cannot abort
+                // the entire calendar sync (which would also block the sync token
+                // from advancing and stall Google→NC indefinitely).
+                $this->logger->warning('Failed to process Google event; skipping', [
+                    'user'  => $userId,
+                    'gId'   => $gEventId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         // Pass 2: push NC events that have no mapping yet to Google.
@@ -479,8 +490,17 @@ class SyncEngine {
             }
 
             // No matching Google event found: insert it.
-            $gEvent  = $this->icalConverter->icalToGoogleEvent($ncEvent['data']);
-            $created = $this->googleService->insertEvent($userEmail, $googleCalendarId, $gEvent);
+            try {
+                $gEvent  = $this->icalConverter->icalToGoogleEvent($ncEvent['data']);
+                $created = $this->googleService->insertEvent($userEmail, $googleCalendarId, $gEvent);
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to insert NC event into Google; skipping', [
+                    'user'  => $userId,
+                    'ncUid' => $uid,
+                    'error' => $e->getMessage(),
+                ]);
+                continue;
+            }
 
             $gEventId = $created->getId();
             if ($gEventId === null) {

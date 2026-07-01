@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.17 – 2026-07-01
+
+### Fixed
+- Critical: `googleEventToIcal` wrote the last-modified timestamp as `LASTMODIFIED` (no hyphen), which sabre/vobject re-reads as a plain-text `Unknown` property. `extractLastModified` then called `->getDateTime()` on it, throwing `Call to undefined method Sabre\VObject\Property\Unknown::getDateTime()`. This aborted the whole calendar sync for affected users on every run (18k+ events affected), so the Google sync token never advanced and Google→NC changes were never applied. Now writes the correct `LAST-MODIFIED` property and reads last-modified defensively (tolerating malformed stored data).
+- Resilience: per-event failures in both sync passes are now caught and logged instead of aborting the entire calendar sync, preventing a single malformed event from stalling the sync token and blocking all future syncs.
+
 ## 1.0.16 – 2026-06-13
 
 ### Fixed

@@ -75,8 +75,11 @@ class IcalConverter {
         $this->applyGoogleDatesToVEvent($vevent, $event);
 
         if ($event->getUpdated()) {
-            $vevent->DTSTAMP      = $this->toSabreDateTime($event->getUpdated());
-            $vevent->LASTMODIFIED = $this->toSabreDateTime($event->getUpdated());
+            // Note: the iCal property is "LAST-MODIFIED" (with hyphen). Writing it
+            // as "LASTMODIFIED" produces a plain-text Unknown property that later
+            // crashes ->getDateTime(). Use the correct name via array access.
+            $vevent->DTSTAMP = $this->toSabreDateTime($event->getUpdated());
+            $vevent->{'LAST-MODIFIED'} = $this->toSabreDateTime($event->getUpdated());
         }
 
         if ($event->getRecurrence() !== null && count($event->getRecurrence()) > 0) {
@@ -299,13 +302,50 @@ class IcalConverter {
         if ($vevent === null) {
             return null;
         }
-        if (isset($vevent->LASTMODIFIED)) {
-            return \DateTimeImmutable::createFromInterface($vevent->LASTMODIFIED->getDateTime());
-        }
-        if (isset($vevent->DTSTAMP)) {
-            return \DateTimeImmutable::createFromInterface($vevent->DTSTAMP->getDateTime());
+        // Try the standard property first, then the malformed "LASTMODIFIED"
+        // written by older versions of this app, then DTSTAMP as last resort.
+        // Each candidate is read defensively because a property may have been
+        // stored as a plain-text (Unknown) value that has no getDateTime().
+        foreach (['LAST-MODIFIED', 'LASTMODIFIED', 'DTSTAMP'] as $name) {
+            $prop = $vevent->{$name} ?? null;
+            $dt = $this->safeDateTime($prop);
+            if ($dt !== null) {
+                return $dt;
+            }
         }
         return null;
+    }
+
+    /**
+     * Best-effort conversion of a sabre/vobject property into a DateTimeImmutable.
+     *
+     * Handles both proper ICalendar DateTime properties (via getDateTime()) and
+     * plain-text/Unknown properties (by parsing their raw string value). Returns
+     * null on any failure so callers never crash on malformed stored data.
+     *
+     * @param mixed $property Sabre property instance or null.
+     * @return \DateTimeImmutable|null
+     */
+    private function safeDateTime($property): ?\DateTimeImmutable {
+        if ($property === null) {
+            return null;
+        }
+        if (method_exists($property, 'getDateTime')) {
+            try {
+                return \DateTimeImmutable::createFromInterface($property->getDateTime());
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+        $raw = trim((string)$property);
+        if ($raw === '') {
+            return null;
+        }
+        try {
+            return new \DateTimeImmutable($raw);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**
