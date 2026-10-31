@@ -123,7 +123,11 @@ class NextcloudCalendarService {
      */
     public function updateEvent(string $calendarId, string $uid, string $icalData): string {
         $id = (int)$calendarId;
-        $uri = $this->uidToUri($uid);
+        // CalDAV clients (e.g. Cal.com) may store the object under a filename that
+        // does not match rawurlencode(uid).ics (Cal.com drops the "@domain" part).
+        // Resolve the actual stored URI before updating to avoid
+        // "Calendarobject does not exist" failures.
+        $uri = $this->resolveUri($id, $uid) ?? $this->uidToUri($uid);
         $this->calDavBackend->updateCalendarObject($id, $uri, $icalData);
         $obj = $this->calDavBackend->getCalendarObject($id, $uri);
         return (string)($obj['etag'] ?? '');
@@ -202,7 +206,10 @@ class NextcloudCalendarService {
      */
     public function getEvent(string $calendarId, string $uid): ?array {
         $id = (int)$calendarId;
-        $uri = $this->uidToUri($uid);
+        $uri = $this->resolveUri($id, $uid);
+        if ($uri === null) {
+            return null;
+        }
         $obj = $this->calDavBackend->getCalendarObject($id, $uri);
         if ($obj === null) {
             return null;

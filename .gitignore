@@ -9,3 +9,6 @@ composer-setup.php
 *.swp
 *.swo
 /node_modules/
+
+# NC marketplace code signing — non committare
+/.certs/

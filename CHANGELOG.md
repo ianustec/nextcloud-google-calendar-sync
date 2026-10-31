@@ -5,6 +5,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.18 – 2026-10-31
+
+### Changed
+- Compatible with Nextcloud 33 (`max-version` 33). Verified on Nextcloud 33.0.10: app enables, every class loads, all imported Nextcloud APIs exist, the sync background job runs without errors. No code changes.
+
+## 1.0.17 – 2026-07-01
+
+### Fixed
+- Critical: `googleEventToIcal` wrote the last-modified timestamp as `LASTMODIFIED` (no hyphen), which sabre/vobject re-reads as a plain-text `Unknown` property. `extractLastModified` then called `->getDateTime()` on it, throwing `Call to undefined method Sabre\VObject\Property\Unknown::getDateTime()`. This aborted the whole calendar sync for affected users on every run (18k+ events affected), so the Google sync token never advanced and Google→NC changes were never applied. Now writes the correct `LAST-MODIFIED` property and reads last-modified defensively (tolerating malformed stored data).
+- Resilience: per-event failures in both sync passes are now caught and logged instead of aborting the entire calendar sync, preventing a single malformed event from stalling the sync token and blocking all future syncs.
+
+## 1.0.16 – 2026-06-13
+
+### Fixed
+- `updateEvent`/`getEvent`: resolve the actual stored CalDAV URI instead of assuming `rawurlencode(uid).ics`. Cal.com (and other clients) store objects under a filename that drops the `@domain` part of the UID, causing "Calendarobject does not exist" on Google→NC updates and aborting the whole calendar sync.
+- NC→Google: push modifications of already-mapped NC events to Google. Pass 1 only reconciles events present in the incremental Google result, so NC-only edits (Google side unchanged) were never propagated.
+
+## 1.0.15 – 2026-05-30
+
+### Fixed
+- `icalToGoogleEvent`: handle events with `DURATION` instead of `DTEND` (Google API returned 400 "Missing end time")
+- `icalToGoogleEvent`: fallback to zero-duration end when no end time is present at all
+- NC CalDAV scheduling delivery now works correctly for users with `shareapi_only_share_with_group_members` disabled
+- Removed ghost user account that prevented `findByUri` from resolving a user's email to a principal, blocking all calendar invitation delivery
+
 ## 1.0.5 – 2026-05-23
 
 ### Changed
