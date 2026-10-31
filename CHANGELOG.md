@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## 1.0.18 – 2026-10-31
+
+### Changed
+- Compatible with Nextcloud 33 (`max-version` 33). Verified on Nextcloud 33.0.10: app enables, every class loads, all imported Nextcloud APIs exist, the sync background job runs without errors. No code changes.
+
 ## 1.0.17 – 2026-07-01
 
 ### Fixed
